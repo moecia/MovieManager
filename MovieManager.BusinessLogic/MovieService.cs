@@ -3,31 +3,28 @@ using MovieManager.Data;
 using Serilog;
 using System;
 using System.Collections.Generic;
+using System.Data.Entity;
+using System.Data.SqlClient;
 using System.Linq;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace MovieManager.BusinessLogic
 {
     public class MovieService
     {
-        public List<MovieViewModel> AllMoviesCache;
+        private ScrapeService _scrapeService;
 
-        public enum FilterType { Actors, Genres, Tags }
-        public enum WildcardType { ImdbId, Title }
-        public enum PreciseType { Director, Year, Liked }
-
-        public MovieService()
+        public MovieService(ScrapeService scrapeService)
         {
-            Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.Debug()
-                .WriteTo.Console()
-                .WriteTo.File($"logs/movieSrv-{DateTime.Now.ToString("yyyyMMddHHmmss")}.txt")
-                .CreateLogger();
+            _scrapeService = scrapeService;
         }
 
-        public async Task InsertMovies(List<Movie> movies)
+        public async Task InsertMovies(List<Movie> movies, bool scrapeActorInfo = false, bool forceUpdate = false)
         {
             var currentImdb = string.Empty;
+            var count = 0;
             try
             {
                 using (var context = new DatabaseContext())
@@ -37,46 +34,71 @@ namespace MovieManager.BusinessLogic
                     var distinctTags = movies.SelectMany(x => x.Tags.Select(x => x)).Distinct().ToList();
 
                     var tasks = new List<Task>();
-                    tasks.Add(InsertActors(context, distinctActors));
+                    tasks.Add(InsertActors(context, distinctActors, scrapeActorInfo));
                     tasks.Add(InsertGenres(context, distinctGenres));
                     tasks.Add(InsertTags(context, distinctTags));
                     await Task.WhenAll(tasks);
 
                     foreach (var movie in movies)
                     {
-                        currentImdb = movie.ImdbId;
-                        Log.Debug($"Start to process movie: {movie.ImdbId}.");
-                        var exisitingMovie = context.Movies.Where(x => x.ImdbId == movie.ImdbId).FirstOrDefault();
-                        if (exisitingMovie == null)
+                        try
                         {
-                            InsertMovie(context, movie);
-                        }
-                        else if (exisitingMovie != null)
-                        {
-                            if (!string.IsNullOrEmpty(movie.DateAdded) && !string.IsNullOrEmpty(exisitingMovie.DateAdded))
+                            currentImdb = movie.ImdbId;
+                            Log.Debug($"Start to process movie: {movie.ImdbId}.");
+                            var exisitingMovie = context.Movies.Where(x => x.ImdbId == movie.ImdbId).FirstOrDefault();
+                            if (exisitingMovie == null)
                             {
-                                if (DateTime.Parse(movie.DateAdded) > DateTime.Parse(exisitingMovie.DateAdded))
+                                InsertMovie(context, movie);
+                                count++;
+                            }
+                            else if (exisitingMovie != null)
+                            {
+                                //if (exisitingMovie.FanArtLocation == null && exisitingMovie.PosterFileLocation == null)
+                                //{
+                                //    UpdateMovie(context, movie, exisitingMovie);
+                                //}
+                                //if (exisitingMovie.MovieLocation != movie.MovieLocation)
+                                //{
+                                //    UpdateMovie(context, movie, exisitingMovie);
+                                //}
+                                if (!string.IsNullOrEmpty(movie.DateAdded) && !string.IsNullOrEmpty(exisitingMovie.DateAdded))
                                 {
-                                    UpdateMovie(context, movie, exisitingMovie);
+                                    if ((DateTime.Parse(movie.DateAdded) > DateTime.Parse(exisitingMovie.DateAdded)) || forceUpdate)
+                                    {
+                                        UpdateMovie(movie, exisitingMovie);
+                                    }
                                 }
                             }
+                            context.SaveChanges();
+                            Log.Debug($"Movie: {movie.ImdbId} has been added.");
                         }
-                        context.SaveChanges();
-                        Log.Debug($"Movie: {movie.ImdbId} has been added.");
+                        catch (Exception ex)
+                        {
+                            Log.Error($"An error occurs when processing movie: {currentImdb} \n\r");
+                            Log.Error(ex.ToString());
+                        }
                     }
-                    // Remove deleted movies from db
-                    List<string> allImdbs = movies.Select(x => x.ImdbId).ToList();
-                    var moviesToRemove = context.Movies.Where(x => !allImdbs.Contains(x.ImdbId)).ToList();
-                    DeleteMovies(context, moviesToRemove);
                     context.SaveChanges();
+                    Log.Debug($"{count} movies have been added!");
                     Log.Debug($"All movies have been processed successfully!");
                 }
             }
             catch (Exception ex)
             {
-                Log.Error($"An error occurs when processing movie: {currentImdb} \n\r");
+                Log.Error($"An error occurs when processing movies. \n\r");
                 Log.Error(ex.ToString());
             }
+        }
+
+        public List<string> DeleteRemovedMovies(List<string> movies)
+        {
+            var moviesToRemove = new List<Movie>();
+            using(var context = new DatabaseContext())
+            {
+                moviesToRemove = context.Movies.Where(x => movies.Contains(x.ImdbId) == false).ToList();
+                DeleteMovies(moviesToRemove);
+            }
+            return moviesToRemove.Select(x => x.ImdbId).ToList();
         }
 
         public List<MovieViewModel> GetMovies()
@@ -84,17 +106,11 @@ namespace MovieManager.BusinessLogic
             var result = new List<MovieViewModel>();
             try
             {
-                result = new List<MovieViewModel>();
                 using (var context = new DatabaseContext())
                 {
                     var movies = context.Movies.ToList();
-                    foreach (var movie in movies)
-                    {
-                        MovieViewModel vm = BuildMovieViewModel(context, movie);
-                        result.Add(vm);
-                    }
+                    result = BuildMovieViewModel(movies);
                 }
-                AllMoviesCache = result;
             }
             catch (Exception ex)
             {
@@ -104,74 +120,74 @@ namespace MovieManager.BusinessLogic
             return result;
         }
 
-        public List<MovieViewModel> GetMoviesByFilters(FilterType filterType, List<string> filters)
-        {
-            var result = new List<MovieViewModel>();
-            try
-            {
-                if (AllMoviesCache == null)
-                {
-                    GetMovies();
-                }
-                 result = new List<MovieViewModel>();
-                using (var context = new DatabaseContext())
-                {
-                    foreach (var movie in AllMoviesCache)
-                    {
-                        switch (filterType)
-                        {
-                            case FilterType.Actors:
-                                if (filters.All(x => movie.Actors.Select(x => x.Name).Contains(x)))
-                                {
-                                    result.Add(movie);
-                                }
-                                break;
-                            case FilterType.Genres:
-                                if (filters.All(x => movie.Genres.Select(x => x.Name).Contains(x)))
-                                {
-                                    result.Add(movie);
-                                }
-                                break;
-                            case FilterType.Tags:
-                                if (filters.All(x => movie.Tags.Select(x => x.Name).Contains(x)))
-                                {
-                                    result.Add(movie);
-                                }
-                                break;
-                        }
-
-                    }
-                }
-            }
-            catch(Exception ex)
-            {
-                Log.Error($"An error occurs when getting movies. \n\r");
-                Log.Error(ex.ToString());
-            }
-            return result;
-        }
-
-        public List<MovieViewModel> GetMoviesWildcard(WildcardType wildcardType, string searchString)
+        public List<MovieViewModel> GetMoviesByFilters(FilterType filterType, List<string> filters, bool isAndOperator)
         {
             var result = new List<MovieViewModel>();
             var movies = new List<Movie>();
             try
             {
+                var sb = new StringBuilder();
+                var searchString = string.Empty;
+                var searchLength = filters.Count;
+                var sqlString = string.Empty;
+                if (filterType != FilterType.Directors || filterType != FilterType.Years)
+                {
+                    for (int i = 0; i < filters.Count; ++i)
+                    {
+                        if (i == filters.Count - 1)
+                        {
+                            sb.Append($"'{filters[i]}'");
+                        }
+                        else
+                        {
+                            sb.Append($"'{filters[i]}',");
+                        }
+                    }
+                    searchString = sb.ToString();
+                }
+
+                var yearSearchFilters = new List<int>();
+                if(filterType == FilterType.Years)
+                {
+                    foreach (var yearString in filters)
+                    {
+                        yearSearchFilters.Add(int.Parse(yearString));
+                    }
+                }
+
                 using (var context = new DatabaseContext())
                 {
-                    switch (wildcardType)
+                    switch (filterType)
                     {
-                        case WildcardType.ImdbId:
-                            movies = context.Movies.Where(x => x.ImdbId.Contains(searchString)).ToList();
+                        case FilterType.Actors:
+                            sqlString = "select * from " +
+                            "(select ImdbId, count(ImdbId) as cnt " +
+                            $"from MovieActors WHERE ActorName in ({searchString}) group by ImdbId) abc " +
+                            $"join Movie m on abc.ImdbId = m.ImdbId where cnt >= {(isAndOperator ? 1 : searchLength).ToString()};";
+                            movies = context.Database.SqlQuery<Movie>(sqlString).ToList();
                             break;
-                        case WildcardType.Title:
-                            movies = context.Movies.Where(x => x.Title.Contains(searchString)).ToList();
+                        case FilterType.Genres:
+                            sqlString = "select * from " +
+                            "(select ImdbId, count(ImdbId) as cnt " +
+                            $"from MovieGenres WHERE GenreName in ({searchString}) group by ImdbId) abc " +
+                            $"join Movie m on abc.ImdbId = m.ImdbId where cnt >= {(isAndOperator ? 1 : searchLength).ToString()};";
+                            movies = context.Database.SqlQuery<Movie>(sqlString).ToList();
+                            break;
+                        case FilterType.Tags:
+                            sqlString = "select * from " +
+                            "(select ImdbId, count(ImdbId) as cnt " +
+                            $"from MovieTags WHERE TagName in ({searchString}) group by ImdbId) abc " +
+                            $"join Movie m on abc.ImdbId = m.ImdbId where cnt >= {(isAndOperator ? 1 : searchLength).ToString()};";
+                            movies = context.Database.SqlQuery<Movie>(sqlString).ToList();
+                            break;
+                        case FilterType.Directors:
+                            movies = context.Movies.Where(x => filters.Contains(x.Director)).ToList();
+                            break;
+                        case FilterType.Years:
+                            movies = context.Movies.Where(x => yearSearchFilters.Contains(x.Year)).ToList();
                             break;
                     }
-                    foreach (var m in movies)
-                    {
-                        result.Add(BuildMovieViewModel(context, m));
-                    }
+                    result = BuildMovieViewModel(movies);
                 }
             }
             catch (Exception ex)
@@ -182,32 +198,17 @@ namespace MovieManager.BusinessLogic
             return result;
         }
 
-        public List<MovieViewModel> GetMoviePrecisely(PreciseType preciseType, string searchString)
+        public List<MovieViewModel> GetMoviesWildcard(string searchString)
         {
             var result = new List<MovieViewModel>();
-            var movies = new List<Movie>();
-            try 
+            try
             {
                 using (var context = new DatabaseContext())
                 {
-                    switch (preciseType)
-                    {
-                        case PreciseType.Director:
-                            movies = context.Movies.Where(x => x.Director == searchString).ToList();
-                            break;
-                        case PreciseType.Liked:
-                            var flag = searchString == "Y" ? true : false;
-                            movies = context.Movies.Where(x => x.Liked == flag).ToList();
-                            break;
-                        case PreciseType.Year:
-                            var year = int.Parse(searchString);
-                            movies = context.Movies.Where(x => x.Year == year).ToList();
-                            break;
-                    }
-                    foreach (var m in movies)
-                    {
-                        result.Add(BuildMovieViewModel(context, m));
-                    }
+                    searchString = searchString.Trim().Replace(' ', '%');
+                    var sqlString = $"select * from Movie where Title like '%{searchString}%'";
+                    var movies = context.Database.SqlQuery<Movie>(sqlString).ToList();
+                    result = BuildMovieViewModel(movies);
                 }
             }
             catch (Exception ex)
@@ -218,99 +219,230 @@ namespace MovieManager.BusinessLogic
             return result;
         }
 
-        public List<string> GetMovieLocations(MovieViewModel movie)
+        public List<MovieViewModel> GetMostRecentMovies()
         {
-            var result = new List<string>();
+            var result = new List<MovieViewModel>();
+            var movies = new List<Movie>();
             try
             {
-                if(!string.IsNullOrEmpty(movie.MovieLocation))
+                using (var context = new DatabaseContext())
                 {
-                    var locations = movie.MovieLocation.Split(',').ToList();
-                    foreach(var loc in locations)
-                    {
-                        if(!string.IsNullOrEmpty(loc))
-                        {
-                            result.Add(loc);
-                        }
-                    }
+                    //var month = DateTime.Now.AddMonths(-3).Month.ToString();
+                    //var year = DateTime.Now.AddMonths(-3).Year.ToString();
+                    //var sqlString = $"select * from Movie where DATE(DateAdded) > Date('{year}-{month}-01') order by DateAdded desc";
+                    //movies = context.Database.SqlQuery<Movie>(sqlString).ToList();
+                    movies = context.Movies.OrderByDescending(x => x.DateAdded).Take(100).ToList();
+                    result = BuildMovieViewModel(movies);
                 }
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
-                Log.Error($"An error occurs when splitting movie locations. \n\r");
+                Log.Error($"An error occurs when getting movies. \n\r");
                 Log.Error(ex.ToString());
             }
             return result;
         }
 
-        private MovieViewModel BuildMovieViewModel(DatabaseContext context, Movie movie)
+        public List<MovieViewModel> GetLikedMovies()
         {
-            var actors = context.MovieActors
-                            .Where(x => x.ImdbId == movie.ImdbId)
-                            .Join(context.Actors,
-                                    ma => ma.ActorName,
-                                    a => a.Name,
-                                    (ma, a) => new ActorViewModel()
+            var result = new List<MovieViewModel>();
+            var movies = new List<Movie>();
+            try
+            {
+                using (var context = new DatabaseContext())
+                {
+                    movies = context.Movies.Where(x => x.Liked).ToList();
+                    result = BuildMovieViewModel(movies);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"An error occurs when getting liked movies. \n\r");
+                Log.Error(ex.ToString());
+            }
+            return result;
+        }
+
+        public List<int> GetMovieYears()
+        {
+            var result = new List<int>();
+            try
+            {
+                using (var context = new DatabaseContext())
+                {
+                    result = context.Movies.Select(x => x.Year).Distinct().ToList();
+                    result.Sort();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"An error occurs when getting movie years. \n\r");
+                Log.Error(ex.ToString());
+            }
+            return result;
+        }
+
+        public MovieDetails GetMovieDetails(MovieViewModel mvm)
+        {
+            MovieDetails movieDetails = null;
+            using(var context = new DatabaseContext())
+            {
+                var movie = context.Movies.Where(x => x.ImdbId == mvm.ImdbId).FirstOrDefault();
+                var actors = context.MovieActors
+                   .Where(x => x.ImdbId == mvm.ImdbId)
+                   .Join(context.Actors,
+                           ma => ma.ActorName,
+                           a => a.Name,
+                           (ma, a) => new ActorViewModel()
+                           {
+                               Name = a.Name,
+                               DateofBirth = a.DateofBirth,
+                               Height = a.Height,
+                               LastUpdated = a.LastUpdated,
+                               Cup = a.Cup,
+                               Liked = a.Liked
+                           }).ToList();
+                var genres = context.MovieGenres
+                    .Where(x => x.ImdbId == mvm.ImdbId)
+                    .Join(context.Genres,
+                            mg => mg.GenreName,
+                            g => g.Name,
+                            (mg, g) => new GenreViewModel()
+                            {
+                                Name = g.Name
+                            }).ToList();
+                var tags = context.MovieTags
+                    .Where(x => x.ImdbId == mvm.ImdbId)
+                    .Join(context.Tags,
+                            mt => mt.TagName,
+                            t => t.Name,
+                            (mt, t) => new TagViewModel()
+                            {
+                                Name = t.Name
+                            }).ToList();
+                movieDetails = new MovieDetails()
+                {
+                    ImdbId = mvm.ImdbId,
+                    Title = mvm.Title,
+                    Plot = movie.Plot,
+                    Year = movie.Year,
+                    Runtime = movie.Runtime,
+                    Studio = movie.Studio,
+                    PosterFileLocation = mvm.PosterFileLocation,
+                    FanArtLocation = mvm.FanArtLocation,
+                    MovieLocation = mvm.MovieLocation,
+                    PlayedCount = movie.PlayedCount,
+                    DateAdded = movie.DateAdded,
+                    ReleaseDate = movie.ReleaseDate,
+                    Liked = movie.Liked,
+                    Genres = genres,
+                    Tags = tags,
+                    Actors = actors
+                };
+            }
+            return movieDetails;
+
+        }
+
+        public bool LikeMovie(string imdbId)
+        {
+            try
+            {
+                using(var context = new DatabaseContext())
+                {
+                    var movie = context.Movies.Where(x => x.ImdbId == imdbId).FirstOrDefault();
+                    movie.Liked = !movie.Liked;
+                    context.SaveChanges();
+                    return movie.Liked;
+                }
+
+            }
+            catch(Exception ex)
+            {
+                Log.Error($"An error occurs when setting movie's like flag. \n\r");
+                Log.Error(ex.ToString());
+            }
+            return false;
+        }
+
+        private List<MovieViewModel> BuildMovieViewModel(List<Movie> movies)
+        {
+            var results = new List<MovieViewModel>();
+            var lockObject = new object();
+            var keyValuePairs = new List<KeyValuePair<Movie, bool>>();
+            foreach (var m in movies)
+            {
+                keyValuePairs.Add(new KeyValuePair<Movie, bool>(m, false));
+            }
+            var taskArray = new Task[4];
+            for (int i = 0; i < taskArray.Length; i++)
+            {
+                taskArray[i] = Task.Factory.StartNew(() =>
+                {
+                    for (int j = 0; j < keyValuePairs.Count; j++)
+                    {
+                        lock (lockObject)
+                        {
+                            if (!keyValuePairs[j].Value)
+                            {
+                                var newKvp = new KeyValuePair<Movie, bool>(keyValuePairs[j].Key, true);
+                                keyValuePairs[j] = newKvp;
+                                var movie = keyValuePairs[j].Key;
+                               
+                                var movieLocations = movie.MovieLocation.Split('|');
+                                var movieClips = new List<MovieViewModel>();
+                                for (int k = 0; k < movieLocations.Length; k++)
+                                {
+                                    if (!string.IsNullOrEmpty(movieLocations[k]))
                                     {
-                                        Name = a.Name,
-                                        Age = a.Age,
-                                        Height = a.Height,
-                                        Liked = a.Liked
-                                    }).ToList();
-            var genres = context.MovieGenres
-                .Where(x => x.ImdbId == movie.ImdbId)
-                .Join(context.Genres,
-                        mg => mg.GenreName,
-                        g => g.Name,
-                        (mg, g) => new GenreViewModel()
-                        {
-                            Name = g.Name
-                        }).ToList();
-            var tags = context.MovieTags
-                .Where(x => x.ImdbId == movie.ImdbId)
-                .Join(context.Tags,
-                        mt => mt.TagName,
-                        t => t.Name,
-                        (mt, t) => new TagViewModel()
-                        {
-                            Name = t.Name
-                        }).ToList();
-            var vm = new MovieViewModel()
-            {
-                ImdbId = movie.ImdbId,
-                Title = movie.Title,
-                Plot = movie.Plot,
-                Year = movie.Year,
-                Runtime = movie.Runtime,
-                Studio = movie.Studio,
-                PosterFileLocation = movie.PosterFileLocation,
-                FanArtLocation = movie.FanArtLocation,
-                MovieLocation = movie.MovieLocation,
-                PlayedCount = movie.PlayedCount,
-                DateAdded = movie.DateAdded,
-                ReleaseDate = movie.ReleaseDate,
-                Liked = movie.Liked,
-                Genres = genres,
-                Tags = tags,
-                Actors = actors
-            };            
-            
-            return vm;
+                                        var title = string.Empty;
+                                        if (k == 0)
+                                        {
+                                            title = movie.Title;
+                                        }
+                                        else
+                                        {
+                                            title = $"{movie.Title}-cd{k}";
+                                        }
+                                        movieClips.Add(new MovieViewModel()
+                                        {
+                                            ImdbId = movie.ImdbId,
+                                            Title = title,
+                                            PosterFileLocation = "http://127.0.0.1:8080/" + movie.PosterFileLocation?.Remove(0, 3),
+                                            FanArtLocation = "http://127.0.0.1:8080/" + movie.FanArtLocation?.Remove(0, 3),
+                                            MovieLocation = movieLocations[k],
+                                            DateAdded = movie.DateAdded
+                                        });
+                                    }
+                                }
+                                results.AddRange(movieClips);
+                            }
+                        }
+                    }
+                });
+            }
+
+            Task.WaitAll(taskArray);
+            return results;
         }
 
-        private async Task InsertActors(DatabaseContext context, List<string> actors)
+        private async Task InsertActors(DatabaseContext context, List<string> actors, bool scrapeActorInfo)
         {
             var allActors = context.Actors.Select(x => x.Name).ToHashSet();
 
             foreach(var actor in actors)
             {
-                if(!allActors.Contains(actor))
+                if (!allActors.Contains(actor))
                 {
                     context.Actors.Add(new Actor()
                     {
                         Name = actor
                     });
                 }
+            }
+            if(scrapeActorInfo)
+            {
+                _scrapeService.GetActorInformation(DateTime.Now.ToString("yyyy-MM-dd"));
             }
             await context.SaveChangesAsync();
         }
@@ -383,7 +515,7 @@ namespace MovieManager.BusinessLogic
             }
         }
 
-        private void UpdateMovie(DatabaseContext context, Movie movie, Movie exisitingMovie)
+        private void UpdateMovie(Movie movie, Movie exisitingMovie)
         {
             exisitingMovie.ImdbId = movie.ImdbId;
             exisitingMovie.Title = movie.Title;
@@ -401,17 +533,22 @@ namespace MovieManager.BusinessLogic
             exisitingMovie.Actors = movie.Actors;
             exisitingMovie.Director = movie.Director;
 
-            DeleteForeignKeys(context, movie);
-            InsertForeignKeys(context, movie);
+            //DeleteForeignKeys(context, movie);
+            //InsertForeignKeys(context, movie);
         }
 
-        private void DeleteMovies(DatabaseContext context, List<Movie> moviesToRemove)
+        private void DeleteMovies(List<Movie> moviesToRemove)
         {
-            foreach (var movie in moviesToRemove)
+            using(var context = new DatabaseContext())
             {
-                DeleteForeignKeys(context, movie);
-                DeleteFromPlayList(context, movie);
-                context.Movies.Remove(movie);
+                foreach (var movie in moviesToRemove)
+                {
+                    var m = context.Movies.Where(x => x.ImdbId == movie.ImdbId).FirstOrDefault();
+                    DeleteForeignKeys(context, m);
+                    DeleteFromPlayList(context, m);
+                    context.Movies.Remove(m);
+                    context.SaveChanges();
+                }
             }
         }
 
@@ -424,12 +561,15 @@ namespace MovieManager.BusinessLogic
             context.MovieActors.RemoveRange(existingMovieActors);
             context.MovieGenres.RemoveRange(exsitingMovieGenres);
             context.MovieTags.RemoveRange(exsitingMovieTags);
+
+            context.SaveChanges();
         }
 
         private void DeleteFromPlayList(DatabaseContext context, Movie movie)
         {
             var playListMovie = context.PlayLists.Where(x => x.ImdbId == movie.ImdbId).ToList();
             context.PlayLists.RemoveRange(playListMovie);
+            context.SaveChanges();
         }
     }
 }

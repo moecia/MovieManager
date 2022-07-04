@@ -1,8 +1,10 @@
 ﻿using MovieManager.ClassLibrary;
+using MovieManager.Data;
 using Serilog;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace MovieManager.BusinessLogic
@@ -13,30 +15,38 @@ namespace MovieManager.BusinessLogic
 
         public PotPlayerService(MovieService movieService)
         {
-            Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.Debug()
-                .WriteTo.Console()
-                .WriteTo.File($"logs/movieSrv-{DateTime.Now.ToString("yyyyMMddHHmmss")}.txt")
-                .CreateLogger();
             _movieService = movieService;
         }
 
-        public void BuildPlayList(string title, string path, List<MovieViewModel> movies)
+        public void BuildPlayList(string title, string path, List<PlayListItem> movies, FileMode fileMode = FileMode.Create)
         {
             try
             {
-                var fs = new FileStream($"{path}\\{title}.dpl", FileMode.Create);
+                var movieLocations = movies.Select(x => x.MovieLocation).ToList();
+                var imdbIds = movies.Select(x => x.ImdbId).ToList();
+                var fs = new FileStream($"{path}\\{title}.dpl", fileMode);
                 using(var writer = new StreamWriter(fs))
                 {
-                    var defaultInput = "DAUMPLAYLIST\nplaytime=0\ntopindex=0\nfoldertype=2\nsaveplaypos=0\n";
-                    writer.WriteLine(defaultInput);
-                    for (int i = 0; i < movies.Count; i++)
+                    if(fileMode == FileMode.Create)
                     {
-                        var movieLocations = _movieService.GetMovieLocations(movies[i]);
-                        foreach(var loc in movieLocations)
+                        var defaultInput = "DAUMPLAYLIST\nplaytime=0\ntopindex=0\nfoldertype=2\nsaveplaypos=0\n";
+                        writer.WriteLine(defaultInput);
+                    }
+                    for (int i = 0; i < movieLocations.Count; i++)
+                    {
+                        writer.WriteLine($"{i + 1}*file*{movieLocations[i]}");
+                    }
+                }
+                using(var context = new DatabaseContext())
+                {
+                    foreach(var imdbId in imdbIds)
+                    {
+                        var movie = context.Movies.Where(x => x.ImdbId == imdbId).FirstOrDefault();
+                        if(movie != null)
                         {
-                            writer.WriteLine($"{i + 1}*file*{loc}");
+                            movie.PlayedCount += 1;
                         }
+                        context.SaveChanges();
                     }
                 }
             }

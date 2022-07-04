@@ -1,4 +1,5 @@
 ﻿using MovieManager.ClassLibrary;
+using Serilog;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -18,44 +19,138 @@ namespace MovieManager.BusinessLogic
             _xmlEngine = xmlEngine;
         }
 
-        public List<Movie> ScanFiles(string rootDirectory)
+        public List<Movie> ScanFiles(string rootDirectory, int dateRange = -1)
         {
             var movies = new List<Movie>();
             try
             {
-                var nfos = Directory.GetFiles(rootDirectory, "*.nfo", SearchOption.AllDirectories);
+                var nfos = new List<string>();  
                 var allMovies = Directory.GetFiles(rootDirectory, $"*.*", SearchOption.AllDirectories)
                         .Where(f => MovieExtensions.Any(f.ToLower().EndsWith)).ToList();
+                if (dateRange == -1)
+                {
+                    nfos = Directory.GetFiles(rootDirectory, "*.nfo", SearchOption.AllDirectories).ToList();
+                }
+                else
+                {
+                    nfos = Directory.GetFiles(rootDirectory, "*.nfo", SearchOption.AllDirectories)
+                        .Where(f => File.GetCreationTime(f) >= DateTime.Now.AddDays(-dateRange)).ToList();
+                }
                 movies = ProcessNfos(nfos, allMovies);
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.ToString());
+                Log.Error($"An error occurs when scanning files! \n\r");
+                Log.Error(ex.ToString());
             }
             return movies;
         }
 
-        private List<Movie> ProcessNfos(string[] nfos, List<string> allMovies)
+        public List<Movie> ScanFiles(string rootDirectory, DateTime startDate)
         {
             var movies = new List<Movie>();
-            foreach (var nfo in nfos)
+            try
             {
-                var movie = _xmlEngine.ParseXmlFile(nfo);
-                if (movie != null)
+                var nfos = new List<string>();  
+                var allMovies = Directory.GetFiles(rootDirectory, $"*.*", SearchOption.AllDirectories)
+                        .Where(f => MovieExtensions.Any(f.ToLower().EndsWith)).ToList();
+                nfos = Directory.GetFiles(rootDirectory, "*.nfo", SearchOption.AllDirectories)
+                    .Where(f => File.GetCreationTime(f) >= startDate).ToList();
+                movies = ProcessNfos(nfos, allMovies);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"An error occurs when scanning files! \n\r");
+                Log.Error(ex.ToString());
+            }
+            return movies;
+        }
+
+        public List<string> ScanFilesForImdbId(string rootDirectory)
+        {
+            var imdbIds = new List<string>();
+            try
+            {
+                var nfos = new List<string>();
+                nfos = Directory.GetFiles(rootDirectory, "*.nfo", SearchOption.AllDirectories).ToList();
+                foreach(var nfo in nfos)
                 {
-                    var imdb = movie.ImdbId;
-                    if (!string.IsNullOrEmpty(movie.ImdbId))
+
+                    var imdbId = Path.GetFileNameWithoutExtension(nfo).Split(' ')?[0];
+                    if(!string.IsNullOrEmpty(imdbId))
                     {
-                        var movieFileLoc = allMovies.Where(x => x.Contains(imdb)).ToList();
-                        var sb = new StringBuilder();
-                        foreach (var loc in movieFileLoc)
+                        imdbIds.Add(imdbId);
+                    }
+
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"An error occurs when scanning files for imdb ids! \n\r");
+                Log.Error(ex.ToString());
+            }
+            return imdbIds;
+        }
+
+        private List<Movie> ProcessNfos(List<string> nfos, List<string> allMovies)
+        {
+            var movies = new List<Movie>();
+            var currentNfo = String.Empty;
+            try 
+            {
+                foreach (var nfo in nfos)
+                {
+                    currentNfo = nfo;
+                    var movie = _xmlEngine.ParseXmlFile(nfo);
+                    if (movie != null)
+                    {
+                        var imdb = movie.Title.Split(' ')?[0];
+                        if (!string.IsNullOrEmpty(imdb))
                         {
-                            sb.Append(loc + ",");
-                            movie.MovieLocation = sb.ToString();
+                            // Update movie locations
+                            movie.ImdbId = imdb;
+                            var movieFileLoc = allMovies.Where(x => x.Contains(imdb)).ToList();
+                            if (movieFileLoc?.Count() > 0)
+                            {
+                                var sb = new StringBuilder();
+                                foreach (var loc in movieFileLoc)
+                                {
+                                    sb.Append(loc + "|");
+                                    movie.MovieLocation = sb.ToString();
+                                }
+                                // Update fanart/poster
+                                var nfoFileName = Path.GetFileNameWithoutExtension(nfo);
+                                var moviePath = Path.GetDirectoryName(movieFileLoc.FirstOrDefault());
+                                var movieName = Path.GetFileNameWithoutExtension(movieFileLoc.FirstOrDefault());
+                                var fanArtLoc = Directory.GetFiles(moviePath, $"{movieName}-fanart.jpg").FirstOrDefault();
+                                if (string.IsNullOrEmpty(fanArtLoc))
+                                {
+                                    fanArtLoc = Directory.GetFiles(moviePath, $"{nfoFileName}-fanart.jpg").FirstOrDefault();
+                                }
+                                var posterLoc = Directory.GetFiles(moviePath, $"{movieName}-poster.jpg").FirstOrDefault();
+                                if (string.IsNullOrEmpty(posterLoc))
+                                {
+                                    posterLoc = Directory.GetFiles(moviePath, $"{nfoFileName}-poster.jpg").FirstOrDefault();
+                                }
+                                movie.FanArtLocation = fanArtLoc;
+                                movie.PosterFileLocation = posterLoc;
+                                // Update created date
+                                movie.DateAdded = File.GetCreationTime(movieFileLoc.FirstOrDefault()).ToString("yyyy-MM-dd");
+
+                                movies.Add(movie);
+                            }
+                            else
+                            {
+                                Log.Warning($"Skipped nfo files: {currentNfo} because the movie location is null.\n\r");
+                            }
                         }
-                        movies.Add(movie);
                     }
                 }
+            }
+            catch(Exception ex)
+            {
+                Log.Error($"An error occurs when processing nfo files: {currentNfo} \n\r");
+                Log.Error(ex.ToString());
             }
             return movies;
         }
