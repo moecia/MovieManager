@@ -1,8 +1,9 @@
 import "./ActorViewer.css"
 import { useState, forwardRef, useImperativeHandle, useRef } from "react";
-import { Pagination, Button, Spin, Modal, Descriptions, Input } from 'antd';
-import { HeartFilled, HeartOutlined } from '@ant-design/icons';
-import { getActorByName, likeActor, getMoivesByFilter } from "../services/DataService";
+import { Pagination, Button, Spin, Modal, Descriptions, Input, message } from 'antd';
+import { HeartFilled, HeartOutlined,PlusCircleOutlined } from '@ant-design/icons';
+import { getActorByName, likeActor, getMoivesByFilter, createPotPlayerPlayListByActors } from "../services/DataService";
+
 import MovieViewer from "./MovieViewer";
 
 const { Search } = Input;
@@ -72,6 +73,19 @@ const ActorViewer = forwardRef((props, ref) => {
         }).catch(error => console.log(error));
     }
 
+    function createPotPlayList() {
+        let actorslist = [];
+        for (let i = 0; i < actors.length; ++i) {
+            actorslist.push(actors[i]);
+        }
+        createPotPlayerPlayListByActors(actorslist, "Selected Actors").then(() => {
+            message.info("加入完毕");
+        }).catch((error) => {
+            console.log(error);
+            message.info("加入失败!");
+        });
+    }
+
     return (
         <div className="actor-viewer">
             {isLoading ? <div><Spin size="large" /></div> :
@@ -83,7 +97,17 @@ const ActorViewer = forwardRef((props, ref) => {
                     total={actors?.length}
                     className="header-left"
                 />}
-            <Search placeholder="演员名" onSearch={onSearch} className="header-right actor-search-bar" loading={isLoading} />
+            <div className="header-right">
+                <Search placeholder="演员名" onSearch={onSearch} className="header-element-right actor-search-bar" loading={isLoading} />
+                <Button
+                    type="primary"
+                    icon={<PlusCircleOutlined />}
+                    disabled={actors?.length === 0 || isLoading ? true : false}
+                    onClick={createPotPlayList}
+                    className="header-element-right">
+                    加入PotPlayer列表
+                </Button>
+            </div>
             {isLoading ? <div><Spin size="large" /></div> :
                 <div>
                     <div className="actor-list">

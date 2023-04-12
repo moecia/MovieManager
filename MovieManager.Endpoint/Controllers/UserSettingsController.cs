@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using MovieManager.Endpoint.Settings;
+using MovieManager.ClassLibrary;
 using Newtonsoft.Json;
 using System;
 using System.IO;

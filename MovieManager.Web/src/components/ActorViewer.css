@@ -11,3 +11,9 @@
 .actor-list {
     margin: 5px;
 }
+
+
+.header-element-right {
+    vertical-align: middle;
+    margin: 2px
+}

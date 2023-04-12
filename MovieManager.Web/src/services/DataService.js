@@ -434,6 +434,25 @@ export function createPotPlayerPlayList(movies, playListName) {
     });
 }
 
+export function createPotPlayerPlayListByActors(actors, playListName) {
+    return fetch("http://localhost:5100/playlist/createbyactors/" + playListName, {
+        method: "POST",
+        mode: "cors",
+        body: JSON.stringify(actors),
+        headers: {
+            "Content-Type": "application/json"
+        }
+    }).then(resp => {
+        if (!resp.ok) {
+            throw resp;
+        }
+    }).then(resp => {
+        return resp;
+    }).catch(error => {
+        console.log(error);
+    });
+}
+
 export function addToDefaultPotPlayerPlayList(movies) {
     return fetch("http://localhost:5100/playlist/append/default", {
         method: "PUT",

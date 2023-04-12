@@ -20,9 +20,8 @@ namespace MovieManager.Testing
         [Fact]
         public void ScrapeActorTest()
         {
-            var date = DateTime.Parse("June 18, 1998");
             var scrpeService = new ScrapeService();
-            scrpeService.GetActorInformation(DateTime.Now.ToString("yyyy-MM-dd"));
+            scrpeService.GetActorInformation();
         }
     }
 }

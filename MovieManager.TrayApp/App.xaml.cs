@@ -1,8 +1,11 @@
 ﻿using Hardcodet.Wpf.TaskbarNotification;
+using Microsoft.Extensions.Configuration;
 using MovieManager.Endpoint;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Management;
+using System.Threading;
 using System.Windows;
 
 namespace MovieManager.TrayApp
@@ -12,9 +15,11 @@ namespace MovieManager.TrayApp
     /// </summary>
     public partial class App : Application
     {
+        private const int STARTPORT = 8100;
         private TaskbarIcon notifyIcon;
-        public Process WebAppProcess;
-        public Process HttpServerProcess;
+        private Process webAppProcess;
+        private List<Process> httpServerProcesses = new List<Process>();
+
 
         public void Test() { }
 
@@ -30,19 +35,35 @@ namespace MovieManager.TrayApp
         protected override void OnExit(ExitEventArgs e)
         {
             notifyIcon.Dispose(); //the icon would clean up automatically, but this is cleaner
-            KillProcessAndChildrens(WebAppProcess.Id);
-            KillProcessAndChildrens(HttpServerProcess.Id);
+            KillProcessAndChildrens(webAppProcess.Id);
+            foreach(var p in httpServerProcesses)
+            {
+                KillProcessAndChildrens(p.Id);
+            }
             base.OnExit(e);
         }
 
         private void ExecuteCommands()
         {
             var webAppProcessInfo = new ProcessStartInfo("cmd.exe", "/K " + @"serve C:\Projects\MovieManager\MovieManager.Web\build");
-            var httpServerProcessInfo = new ProcessStartInfo("cmd.exe", "/K " + "http-server E:/");
+            var locations = new ConfigurationBuilder().AddJsonFile("appsettings.json").Build().GetSection("UserSettings")["MovieDirectory"].Split(",");
+            var disks = new List<string>();
+            foreach(var l in locations)
+            {
+                disks.Add(l.Trim().Substring(0, 1));
+            }
+            var currentPort = STARTPORT;
+            foreach (var disk in disks)
+            {
+                var info = new ProcessStartInfo("cmd.exe", "/K " + $"http-server {disk}:/ -p {currentPort}");
+                info.CreateNoWindow = true;
+                Process.Start(info);
+                Thread.Sleep(1000);
+                currentPort++;
+            }
+
             webAppProcessInfo.CreateNoWindow = true;
-            httpServerProcessInfo.CreateNoWindow = true;
-            WebAppProcess = Process.Start(webAppProcessInfo);
-            HttpServerProcess = Process.Start(httpServerProcessInfo);
+            webAppProcess = Process.Start(webAppProcessInfo);
         }
 
         private void KillProcessAndChildrens(int pid)

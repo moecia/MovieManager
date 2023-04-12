@@ -1,13 +1,12 @@
-﻿using MovieManager.ClassLibrary;
+﻿using Microsoft.Extensions.Options;
+using MovieManager.ClassLibrary;
 using MovieManager.Data;
 using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
-using System.Data.SqlClient;
 using System.Linq;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace MovieManager.BusinessLogic
@@ -15,10 +14,21 @@ namespace MovieManager.BusinessLogic
     public class MovieService
     {
         private ScrapeService _scrapeService;
+        private Dictionary<string, int> diskPortMapping;
+        private const int STARTPORT = 8100;
 
-        public MovieService(ScrapeService scrapeService)
+        public MovieService(ScrapeService scrapeService,
+            IOptions<UserSettings> config)
         {
             _scrapeService = scrapeService;
+
+            diskPortMapping = new Dictionary<string, int>();
+            var currPort = STARTPORT;
+            foreach (var l in config.Value?.MovieDirectory.Split(","))
+            {
+                diskPortMapping.Add(l.Trim().Substring(0, 1), currPort);
+                currPort++;
+            }
         }
 
         public async Task InsertMovies(List<Movie> movies, bool scrapeActorInfo = false, bool forceUpdate = false)
@@ -63,9 +73,14 @@ namespace MovieManager.BusinessLogic
                                 //}
                                 if (!string.IsNullOrEmpty(movie.DateAdded) && !string.IsNullOrEmpty(exisitingMovie.DateAdded))
                                 {
-                                    if ((DateTime.Parse(movie.DateAdded) > DateTime.Parse(exisitingMovie.DateAdded)) || forceUpdate)
+                                    //|| (DateTime.Parse(movie.DateAdded) > DateTime.Parse(exisitingMovie.DateAdded))
+                                    if (movie.PosterFileLocation != exisitingMovie.PosterFileLocation
+                                        || movie.FanArtLocation != exisitingMovie.FanArtLocation
+                                        || movie.MovieLocation != exisitingMovie.MovieLocation
+                                        || forceUpdate)
                                     {
                                         UpdateMovie(movie, exisitingMovie);
+                                        Log.Information($"Updating {movie.ImdbId} data...");
                                     }
                                 }
                             }
@@ -408,8 +423,8 @@ namespace MovieManager.BusinessLogic
                                         {
                                             ImdbId = movie.ImdbId,
                                             Title = title,
-                                            PosterFileLocation = "http://127.0.0.1:8080/" + movie.PosterFileLocation?.Remove(0, 3),
-                                            FanArtLocation = "http://127.0.0.1:8080/" + movie.FanArtLocation?.Remove(0, 3),
+                                            PosterFileLocation = GetDiskPort(movie.PosterFileLocation?.Substring(0, 1)) + movie.PosterFileLocation?.Remove(0, 3),
+                                            FanArtLocation = GetDiskPort(movie.PosterFileLocation?.Substring(0, 1)) + movie.FanArtLocation?.Remove(0, 3),
                                             MovieLocation = movieLocations[k],
                                             DateAdded = movie.DateAdded
                                         });
@@ -442,7 +457,7 @@ namespace MovieManager.BusinessLogic
             }
             if(scrapeActorInfo)
             {
-                _scrapeService.GetActorInformation(DateTime.Now.ToString("yyyy-MM-dd"));
+                _scrapeService.GetActorInformation();
             }
             await context.SaveChangesAsync();
         }
@@ -570,6 +585,15 @@ namespace MovieManager.BusinessLogic
             var playListMovie = context.PlayLists.Where(x => x.ImdbId == movie.ImdbId).ToList();
             context.PlayLists.RemoveRange(playListMovie);
             context.SaveChanges();
+        }
+
+        private string GetDiskPort(string disk)
+        {
+            if(String.IsNullOrEmpty(disk))
+            {
+                return "";
+            }
+            return $"http://127.0.0.1:{diskPortMapping[disk]}//";
         }
     }
 }

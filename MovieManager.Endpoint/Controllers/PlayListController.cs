@@ -27,7 +27,7 @@ namespace MovieManager.Endpoint.Controllers
 
         [HttpPost]
         [Route("/playlist/create/{playListName}")]
-        public ActionResult AddToDefaultPlayList([FromBody] List<PlayListItem> movies, string playListName)
+        public ActionResult CreatePlayList([FromBody] List<PlayListItem> movies, string playListName)
         {
             if (movies == null || movies.Count == 0)
             {
@@ -36,6 +36,26 @@ namespace MovieManager.Endpoint.Controllers
             try
             {
                 _potPlayerService.BuildPlayList(playListName, path, movies);
+                Process.Start(potPlayerExe);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.ToString());
+            }
+            return Ok();
+        }
+
+        [HttpPost]
+        [Route("/playlist/createbyactors/{playListName}")]
+        public ActionResult CreatePlayListByActors([FromBody] List<string> actors, string playListName)
+        {
+            if (actors == null || actors.Count == 0)
+            {
+                return BadRequest(badRequestMessage);
+            }
+            try
+            {
+                _potPlayerService.BuildPlayListByActors(playListName, path, actors);
                 Process.Start(potPlayerExe);
             }
             catch (Exception ex)

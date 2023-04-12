@@ -4,7 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MovieManager.BusinessLogic;
-using MovieManager.Endpoint.Settings;
+using MovieManager.ClassLibrary;
 using Serilog;
 using System;
 

@@ -8,7 +8,7 @@ const { Meta } = Card;
 const { Search } = Input;
 
 const MovieViewer = forwardRef((props, ref) => {
-    const [numEachPage, setNumEachPage] = useState(16);
+    const [numEachPage, setNumEachPage] = useState(14);
     const [minValue, setMinValue] = useState(0);
     const [maxValue, setMaxValue] = useState(numEachPage);
     const [movies, setMovies] = useState([]);
@@ -93,11 +93,11 @@ const MovieViewer = forwardRef((props, ref) => {
         })
     }
 
-    function loadMovies(filterType, filter) {
+    function loadMovies(filterType, filter, pageRoot) {
         setVisible(false);
         setIsLoading(true);
         getMoivesByFilter(filterType, filter).then(resp => {
-            init(resp, 16);
+            init(resp, 16, pageRoot);
         });
     }
 
@@ -218,13 +218,13 @@ const MovieViewer = forwardRef((props, ref) => {
                     <Descriptions.Item label="播放次数">{movie?.playedCount}</Descriptions.Item>
                     <Descriptions.Item label="情节" span={3}>{movie?.plot}</Descriptions.Item>
                     <Descriptions.Item label="演员" span={3}>
-                        {movie?.actors.map((actor, i) => <Button className="modal-button" icon={<UserOutlined />} key={"actor-desc-" + i} onClick={() => loadMovies(0, [actor.name])}>{actor.name}</Button>)}
+                        {movie?.actors.map((actor, i) => <Button className="modal-button" icon={<UserOutlined />} key={"actor-desc-" + i} onClick={() => loadMovies(0, [actor.name], actor.name)}>{actor.name}</Button>)}
                     </Descriptions.Item>
                     <Descriptions.Item label="类型" span={3}>
-                        {movie?.genres.map((genre, i) => <Button className="modal-button" icon={<GroupOutlined />} key={"actor-desc-" + i} onClick={() => loadMovies(1, [genre.name])}>{genre.name}</Button>)}
+                        {movie?.genres.map((genre, i) => <Button className="modal-button" icon={<GroupOutlined />} key={"actor-desc-" + i} onClick={() => loadMovies(1, [genre.name], genre.name)}>{genre.name}</Button>)}
                     </Descriptions.Item>
                     <Descriptions.Item label="标签" span={3}>
-                        {movie?.tags.map((tag, i) => <Button className="modal-button" icon={<TagOutlined />} key={"tag-desc-" + i} onClick={() => loadMovies(2, [tag.name])}>{tag.name}</Button>)}
+                        {movie?.tags.map((tag, i) => <Button className="modal-button" icon={<TagOutlined />} key={"tag-desc-" + i} onClick={() => loadMovies(2, [tag.name], tag.name)}>{tag.name}</Button>)}
                     </Descriptions.Item>
                 </Descriptions>
             </Modal>

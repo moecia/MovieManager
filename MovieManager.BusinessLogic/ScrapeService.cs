@@ -13,13 +13,13 @@ namespace MovieManager.BusinessLogic
 {
     public class ScrapeService
     {
-        public void GetActorInformation(string updateDate)
+        public void GetActorInformation()
         {
             try
             {
                 using (var context = new DatabaseContext())
                 {
-                    var sqlString = $"select * from Actor where LastUpdated IS NULL OR DATE(LastUpdated) < Date('{updateDate}')";
+                    var sqlString = $"select * from Actor where LastUpdated IS NULL";
                     var actorNames = context.Database.SqlQuery<Actor>(sqlString).Select(x => x.Name).ToList();
 
                     var index = 0;

@@ -2,7 +2,6 @@
 using Microsoft.Extensions.Options;
 using MovieManager.BusinessLogic;
 using MovieManager.ClassLibrary;
-using MovieManager.Endpoint.Settings;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -140,9 +139,12 @@ namespace MovieManager.Endpoint.Controllers
         public async Task<ActionResult> AddNewMoviesAsync(int days)
         {
             var scanner = new FileScanner(_xmlProcessor);
-            var movieDir = _config.Value.MovieDirectory;
-            var m = scanner.ScanFiles(movieDir, days);
-            await _movieService.InsertMovies(m);
+            var movieDir = _config.Value.MovieDirectory.Split(",");
+            foreach (var md in movieDir)
+            {
+                var m = scanner.ScanFiles(md, days);
+                await _movieService.InsertMovies(m);
+            }
             return Ok();
         }
 
